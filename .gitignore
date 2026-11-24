@@ -1,0 +1,18 @@
+# Media files
+*.mp4
+*.mkv
+*.webm
+*.part
+*.temp.*
+*.ytdl
+
+# Chat files
+*.chat.json
+*.live_chat.json
+
+# Local directories
+downloads/
+__pycache__/
+*.pyc
+.env
+.venv
