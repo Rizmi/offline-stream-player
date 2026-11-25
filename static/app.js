@@ -162,7 +162,7 @@ class StreamVaultApp {
   }
 
   async init() {
-    await Promise.all([this.fetchSettings(), this.fetchLibrary(false), this.fetchDownloads()]);
+    await Promise.all([this.fetchSettings(), this.fetchHealth(), this.fetchLibrary(false), this.fetchDownloads()]);
     this._startQueuePolling();
 
     const hash = window.location.hash;
@@ -190,6 +190,25 @@ class StreamVaultApp {
 
   navigateHome() {
     if (this.watch.isActive) this.watch.close();
+  }
+
+  async fetchHealth() {
+    try {
+      const res = await fetch('/api/health');
+      const data = await res.json();
+      const missing = (data.checks || []).filter((c) => !c.ok);
+      const banner = document.getElementById('health-banner');
+      if (missing.length) {
+        document.getElementById('health-banner-text').textContent =
+          `Missing or invalid dependencies: ${missing.map((m) => `${m.name} (${m.detail})`).join(', ')}`;
+        banner.classList.remove('hidden');
+      } else {
+        banner.classList.add('hidden');
+      }
+      return data;
+    } catch (_) {
+      return null;
+    }
   }
 
   async fetchSettings() {
@@ -730,7 +749,7 @@ class StreamVaultApp {
 
   // ---------------- Settings (.env) ----------------
   async openSettingsModal() {
-    await this.fetchSettings();
+    const [, health] = await Promise.all([this.fetchSettings(), this.fetchHealth()]);
     const env = this.settings?.env || {};
     document.getElementById('set-download-dir').value = env.DOWNLOAD_DIR || '';
     const qSel = document.getElementById('set-yt-quality');
@@ -747,6 +766,15 @@ class StreamVaultApp {
     document.getElementById('set-kick-delay').value = env.KICK_REQUEST_DELAY || '0.25';
     document.getElementById('set-thumb-seek').value = env.THUMBNAIL_SEEK_SEC || '120';
     document.getElementById('settings-status').classList.add('hidden');
+    const healthGrid = document.getElementById('settings-health');
+    healthGrid.innerHTML = '';
+    for (const c of health?.checks || []) {
+      const pill = document.createElement('span');
+      pill.className = `health-pill ${c.ok ? 'ok' : 'fail'}`;
+      pill.title = c.detail || '';
+      pill.textContent = c.ok ? `${c.name}: ${c.version}` : `${c.name}: missing`;
+      healthGrid.appendChild(pill);
+    }
     this.openModal('settings-modal');
   }
 

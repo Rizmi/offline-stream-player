@@ -29,13 +29,30 @@ function getAvatarColor(str) {
 }
 
 export class ChatController {
-  constructor({ containerEl, countEl, pausedPillEl, imagesBtnEl, imagesLabelEl, onSeek }) {
+  constructor({
+    containerEl,
+    countEl,
+    pausedPillEl,
+    imagesBtnEl,
+    imagesLabelEl,
+    syncBtnEl,
+    syncBarEl,
+    syncInputEl,
+    syncResetEl,
+    onSeek,
+    onOffsetChange,
+  }) {
     this.containerEl = containerEl;
     this.countEl = countEl;
     this.pausedPillEl = pausedPillEl;
     this.imagesBtnEl = imagesBtnEl;
     this.imagesLabelEl = imagesLabelEl;
+    this.syncBtnEl = syncBtnEl;
+    this.syncBarEl = syncBarEl;
+    this.syncInputEl = syncInputEl;
+    this.syncResetEl = syncResetEl;
     this.onSeek = onSeek;
+    this.onOffsetChange = onOffsetChange;
 
     this.messages = [];
     this.currentIndex = 0;
@@ -43,10 +60,12 @@ export class ChatController {
     this.loadExternalImages = localStorage.getItem(IMAGES_STORAGE_KEY) === 'true';
     this.consecutiveFailures = 0;
     this.circuitBroken = false;
+    this.offsetSec = 0;
     this.currentTimeProvider = () => 0;
 
     this._bindEvents();
     this.updateImagesButton();
+    this._updateSyncUI();
   }
 
   _bindEvents() {
@@ -68,6 +87,38 @@ export class ChatController {
       this.updateImagesButton();
     });
     window.addEventListener('offline', () => this.updateImagesButton());
+
+    this.syncBtnEl.addEventListener('click', () => {
+      this.syncBarEl.classList.toggle('hidden');
+    });
+    this.syncBarEl.querySelectorAll('[data-delta]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const delta = parseFloat(btn.dataset.delta || '0');
+        this.setOffset(this.offsetSec + delta, true);
+      });
+    });
+    this.syncInputEl.addEventListener('change', () => {
+      const val = parseFloat(this.syncInputEl.value || '0');
+      this.setOffset(Number.isFinite(val) ? val : 0, true);
+    });
+    this.syncResetEl.addEventListener('click', () => this.setOffset(0, true));
+  }
+
+  _updateSyncUI() {
+    const rounded = Math.round(this.offsetSec * 10) / 10;
+    const prefix = rounded > 0 ? '+' : '';
+    this.syncBtnEl.textContent = `Sync ${prefix}${rounded}s`;
+    this.syncBtnEl.classList.toggle('active', rounded !== 0);
+    this.syncInputEl.value = String(rounded);
+  }
+
+  setOffset(sec, notify = false) {
+    this.offsetSec = Number.isFinite(sec) ? Math.round(sec * 10) / 10 : 0;
+    this._updateSyncUI();
+    this.resync(this.currentTimeProvider());
+    if (notify && this.onOffsetChange) {
+      this.onOffsetChange(this.offsetSec);
+    }
   }
 
   shouldLoadImages() {
@@ -244,7 +295,7 @@ export class ChatController {
     timeSpan.className = 'chat-time';
     timeSpan.textContent = formatTime(sec);
     timeSpan.title = 'Click to seek video';
-    timeSpan.onclick = () => this.onSeek(sec);
+    timeSpan.onclick = () => this.onSeek(Math.max(0, sec + this.offsetSec));
     content.appendChild(timeSpan);
 
     const authorSpan = document.createElement('span');
@@ -287,7 +338,7 @@ export class ChatController {
 
   resync(currentSec) {
     if (!this.messages.length) return;
-    const currentMs = (currentSec || 0) * 1000;
+    const currentMs = ((currentSec || 0) - this.offsetSec) * 1000;
     this.currentIndex = this._findIndex(currentMs);
     this.containerEl.innerHTML = '';
 
@@ -304,7 +355,7 @@ export class ChatController {
 
   onTimeUpdate(currentSec) {
     if (!this.messages.length) return;
-    const currentMs = currentSec * 1000;
+    const currentMs = (currentSec - this.offsetSec) * 1000;
 
     if (this.currentIndex > 0) {
       const refIdx = Math.min(this.currentIndex, this.messages.length - 1);

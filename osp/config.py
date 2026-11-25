@@ -127,6 +127,10 @@ class AppConfig:
     def pairings_path(self) -> str:
         return os.path.join(self.cache_dir, "pairings.json")
 
+    @property
+    def offsets_path(self) -> str:
+        return os.path.join(self.cache_dir, "offsets.json")
+
     def ensure_dirs(self) -> None:
         if not os.path.isdir(self.download_dir):
             raise ConfigError(f"DOWNLOAD_DIR does not exist: {self.download_dir}")

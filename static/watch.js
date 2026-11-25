@@ -29,8 +29,22 @@ export class WatchController {
       pausedPillEl: document.getElementById('chat-paused-pill'),
       imagesBtnEl: document.getElementById('btn-hud-images'),
       imagesLabelEl: document.getElementById('hud-images-label'),
+      syncBtnEl: document.getElementById('btn-chat-sync'),
+      syncBarEl: document.getElementById('chat-sync-bar'),
+      syncInputEl: document.getElementById('chat-sync-input'),
+      syncResetEl: document.getElementById('btn-chat-sync-reset'),
       onSeek: (sec) => {
         this.player.currentTime = sec;
+      },
+      onOffsetChange: (offsetSec) => {
+        if (this.activeVideo) {
+          this.activeVideo.chat_offset = offsetSec;
+          fetch('/api/chat-offset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ video_id: this.activeVideo.id, offset_sec: offsetSec }),
+          }).catch(() => {});
+        }
       },
     });
 
@@ -341,6 +355,7 @@ export class WatchController {
 
     this.player.src = `/stream?id=${encodeURIComponent(video.id)}`;
     this.player.playbackRate = parseFloat(this.speedSelect.value) || 1;
+    this.chat.setOffset(video.chat_offset || 0, false);
     this.viewEl.classList.add('active');
     this.showHudTemporarily();
 

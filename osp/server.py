@@ -12,6 +12,7 @@ import urllib.parse
 from osp.chat import merge_chat_files, parse_chat_file
 from osp.config import AppConfig, ROOT_DIR, load_config, save_env_updates
 from osp.downloader import DownloadManager, probe_url
+from osp.health import check_dependencies
 from osp.library import MediaLibrary, is_safe_subpath
 
 STATIC_DIR = os.path.join(ROOT_DIR, "static")
@@ -231,6 +232,10 @@ class StudioHandler(http.server.SimpleHTTPRequestHandler):
             self._send_json(200, self.context.cfg.to_api_dict())
             return
 
+        if parsed.path == "/api/health":
+            self._send_json(200, check_dependencies(self.context.cfg))
+            return
+
         if parsed.path == "/" or not os.path.isfile(os.path.join(STATIC_DIR, parsed.path.lstrip("/"))):
             self.path = "/index.html"
 
@@ -303,6 +308,18 @@ class StudioHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_json(404, {"error": "Chat file not found in DOWNLOAD_DIR"})
                 return
             self._send_json(200, {"ok": True})
+            return
+
+        if parsed.path == "/api/chat-offset":
+            vid = body.get("video_id") or ""
+            if not vid:
+                self._send_json(400, {"error": "Missing video_id"})
+                return
+            try:
+                val = self.context.library.set_chat_offset(vid, float(body.get("offset_sec") or 0.0))
+                self._send_json(200, {"offset_sec": val})
+            except (TypeError, ValueError):
+                self._send_json(400, {"error": "Invalid offset_sec"})
             return
 
         if parsed.path == "/api/merge-chats":
@@ -405,6 +422,10 @@ def make_handler(context: AppContext):
 def serve(cfg: AppConfig = None) -> None:
     cfg = cfg or load_config()
     cfg.ensure_dirs()
+    health = check_dependencies(cfg)
+    for item in health["checks"]:
+        if not item["ok"]:
+            print(f"Warning: {item['name']} check failed ({item['detail']})")
     ctx = AppContext(cfg)
     handler_cls = make_handler(ctx)
     with ThreadingHTTPServer((cfg.host, cfg.port), handler_cls) as httpd:

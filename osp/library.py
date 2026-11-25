@@ -92,6 +92,7 @@ class MediaLibrary:
         self._meta_cache = {}
         self._history = {}
         self._pairings = {}
+        self._offsets = {}
         self._video_index = {}
         self._chat_index = {}
         self.reload_config(cfg)
@@ -103,6 +104,7 @@ class MediaLibrary:
             self._meta_cache = _read_json(cfg.library_cache_path, dict)
             self._history = _read_json(cfg.history_path, dict)
             self._pairings = _read_json(cfg.pairings_path, dict)
+            self._offsets = _read_json(cfg.offsets_path, dict)
             self._video_index = {}
             self._chat_index = {}
 
@@ -229,6 +231,7 @@ class MediaLibrary:
                     if chat_info
                     else None
                 ),
+                "chat_offset": float(self._offsets.get(vid, 0.0)),
                 "progress": {
                     "position": hist.get("position", 0.0),
                     "duration": hist.get("duration", cached["duration"]),
@@ -308,6 +311,17 @@ class MediaLibrary:
             _write_json_atomic(self.cfg.pairings_path, self._pairings)
             return True
 
+    def set_chat_offset(self, video_id: str, offset_sec: float) -> float:
+        with self._lock:
+            val = round(float(offset_sec), 1)
+            if abs(val) < 0.05:
+                self._offsets.pop(video_id, None)
+                val = 0.0
+            else:
+                self._offsets[video_id] = val
+            _write_json_atomic(self.cfg.offsets_path, self._offsets)
+            return val
+
     def delete_media(self, video_id: str, delete_chat: bool = False) -> bool:
         video_abs = self.get_video_path(video_id)
         if not video_abs or not is_safe_subpath(self.cfg.download_dir, video_abs):
@@ -335,8 +349,10 @@ class MediaLibrary:
             self._meta_cache.pop(video_id, None)
             self._history.pop(video_id, None)
             self._pairings.pop(video_id, None)
+            self._offsets.pop(video_id, None)
             _write_json_atomic(self.cfg.library_cache_path, self._meta_cache)
             _write_json_atomic(self.cfg.history_path, self._history)
             _write_json_atomic(self.cfg.pairings_path, self._pairings)
+            _write_json_atomic(self.cfg.offsets_path, self._offsets)
 
         return True

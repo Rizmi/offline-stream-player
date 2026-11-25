@@ -49,6 +49,11 @@
     </header>
 
     <main class="library-main">
+      <div id="health-banner" class="health-banner hidden">
+        <span id="health-banner-text"></span>
+        <button class="btn btn-ghost btn-sm" onclick="app.openSettingsModal()">Check Settings</button>
+      </div>
+
       <section id="continue-shelf" class="shelf hidden">
         <div class="section-head">
           <h2>Continue Watching</h2>
@@ -144,7 +149,16 @@
     <aside id="chat-sidebar" class="chat-sidebar">
       <div class="chat-header">
         <span class="chat-header-title">Chat Replay</span>
+        <button id="btn-chat-sync" class="chat-sync-btn" title="Adjust chat sync offset (+ delays chat, - advances chat)">Sync 0s</button>
         <span id="chat-count-label" class="chat-header-count">0 messages</span>
+      </div>
+      <div id="chat-sync-bar" class="chat-sync-bar hidden">
+        <button class="sync-step-btn" data-delta="-10">-10s</button>
+        <button class="sync-step-btn" data-delta="-1">-1s</button>
+        <input id="chat-sync-input" type="number" step="1" value="0" class="sync-input" aria-label="Chat offset in seconds">
+        <button class="sync-step-btn" data-delta="1">+1s</button>
+        <button class="sync-step-btn" data-delta="10">+10s</button>
+        <button id="btn-chat-sync-reset" class="sync-step-btn">Reset</button>
       </div>
       <div id="chat-messages" class="chat-messages">
         <div class="chat-empty">No chat replay loaded for this stream.</div>
@@ -348,6 +362,11 @@
           </div>
         </div>
         <div id="settings-status" class="form-error hidden"></div>
+
+        <div>
+          <label class="field-label">System Dependencies</label>
+          <div id="settings-health" class="health-grid"></div>
+        </div>
       </div>
       <div class="modal-footer">
         <span class="modal-hint">Saved directly to .env (gitignored).</span>

@@ -672,9 +672,10 @@ html, body {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-surface);
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
 }
 
 .chat-header-title {
@@ -682,10 +683,73 @@ html, body {
   font-weight: 600;
 }
 
+.chat-sync-btn {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.chat-sync-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.chat-sync-btn.active {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.chat-sync-bar {
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sync-step-btn {
+  height: 26px;
+  padding: 0 7px;
+  border-radius: 5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sync-step-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.sync-input {
+  flex: 1;
+  min-width: 48px;
+  height: 26px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  text-align: center;
+  outline: none;
+}
+
 .chat-header-count {
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-muted);
+  text-align: right;
 }
 
 .chat-messages {
@@ -1065,6 +1129,46 @@ html, body {
   border-radius: 8px;
   font-size: 13px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+
+.health-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+  background: rgba(225, 29, 72, 0.12);
+  border: 1px solid rgba(225, 29, 72, 0.35);
+  border-radius: 8px;
+  font-size: 13px;
+  color: #fecdd3;
+}
+
+.health-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.health-pill {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.health-pill.ok {
+  color: #86efac;
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.health-pill.fail {
+  color: #fca5a5;
+  border-color: rgba(225, 29, 72, 0.45);
 }
 
 @media (max-width: 780px) {
