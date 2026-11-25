@@ -2,15 +2,18 @@
 *.mp4
 *.mkv
 *.webm
+*.m4v
+*.mov
 *.part
 *.temp.*
 *.ytdl
 
-# Chat files
+# Chat & thumbnail files
 *.chat.json
 *.live_chat.json
+.osp-cache/
 
-# Local directories
+# Local directories & environment
 downloads/
 __pycache__/
 *.pyc

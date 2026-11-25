@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Offline Stream Player</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2313161B'/%3E%3Cpath d='M12 9.5L23 16L12 22.5V9.5Z' fill='%23E11D48'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <!-- ================= LIBRARY DASHBOARD VIEW ================= -->
+  <div id="library-view" class="view active">
+    <header class="topbar">
+      <div class="brand" onclick="app.navigateHome()">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M8 5.14v14l11-7-11-7z"/></svg>
+        </span>
+        <span class="brand-name">StreamVault</span>
+        <span id="library-dir-chip" class="dir-chip" title="Configured DOWNLOAD_DIR"></span>
+      </div>
+
+      <div class="search-wrap">
+        <svg class="search-icon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input id="search-input" type="search" placeholder="Search streams by title or filename... ( / )" autocomplete="off">
+      </div>
+
+      <div class="topbar-actions">
+        <button id="btn-open-local" class="btn btn-ghost" title="Play a local file via drag & drop or OS picker">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          <span>Open Local</span>
+        </button>
+        <button id="btn-merge-chats" class="btn btn-ghost" title="Merge two multi-part chat files">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+          <span>Merge Chats</span>
+        </button>
+        <button id="btn-downloads-drawer" class="btn btn-ghost" title="View download queue">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>Queue</span>
+          <span id="queue-badge" class="badge hidden">0</span>
+        </button>
+        <button id="btn-settings" class="btn btn-ghost btn-icon" title="Settings (.env)">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.09a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <button id="btn-new-download" class="btn btn-primary">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span>New Download</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="library-main">
+      <section id="continue-shelf" class="shelf hidden">
+        <div class="section-head">
+          <h2>Continue Watching</h2>
+          <span id="continue-count" class="muted-count"></span>
+        </div>
+        <div id="continue-grid" class="continue-row"></div>
+      </section>
+
+      <section class="toolbar">
+        <div class="filter-group" id="filter-chips">
+          <button class="chip active" data-filter="all">All Videos</button>
+          <button class="chip" data-filter="with_chat">With Chat</button>
+          <button class="chip" data-filter="no_chat">Missing Chat</button>
+          <button class="chip" data-filter="in_progress">In Progress</button>
+        </div>
+        <div class="toolbar-right">
+          <span id="library-stats" class="library-stats"></span>
+          <select id="sort-select" class="select-input" aria-label="Sort videos">
+            <option value="newest">Newest First</option>
+            <option value="name">Title (A–Z)</option>
+            <option value="duration">Longest Duration</option>
+            <option value="size">Largest File</option>
+          </select>
+          <button id="btn-rescan" class="btn btn-ghost btn-sm" title="Rescan download directory">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            <span>Refresh</span>
+          </button>
+        </div>
+      </section>
+
+      <section id="video-grid" class="video-grid"></section>
+
+      <div id="empty-library" class="empty-state hidden">
+        <div class="empty-icon">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9"/></svg>
+        </div>
+        <h3 id="empty-title">No videos found</h3>
+        <p id="empty-desc">Click New Download to download a YouTube or Kick stream, or drop a file anywhere.</p>
+        <button class="btn btn-primary" onclick="app.openDownloadModal()">Start a Download</button>
+      </div>
+    </main>
+  </div>
+
+  <!-- ================= THEATER WATCH VIEW ================= -->
+  <div id="watch-view" class="view">
+    <div id="watch-stage">
+      <!-- Auto-hiding Studio Top Bar -->
+      <div id="watch-hud" class="watch-hud">
+        <div class="hud-left">
+          <div class="hud-title-group">
+            <div id="watch-title" class="hud-title">Untitled Stream</div>
+            <div id="watch-meta" class="hud-meta"></div>
+          </div>
+        </div>
+
+        <div class="hud-right">
+          <select id="speed-select" class="hud-select" title="Playback Speed ( [ / ] )">
+            <option value="0.75">0.75x</option>
+            <option value="1" selected>1.0x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="1.75">1.75x</option>
+            <option value="2">2.0x</option>
+          </select>
+
+          <button id="btn-hud-pair-chat" class="hud-btn" title="Pair or change chat file">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span id="hud-chat-label">No Chat</span>
+          </button>
+
+          <button id="btn-hud-images" class="hud-btn" title="Toggle external avatars, badges & emotes">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            <span id="hud-images-label">Images: Off</span>
+          </button>
+
+          <button id="btn-hud-toggle-chat" class="hud-btn active" title="Toggle chat panel (C)">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+            <span>Chat</span>
+          </button>
+
+          <button id="btn-back-library" class="hud-btn" title="Back to Library">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            <span>Library</span>
+          </button>
+        </div>
+      </div>
+
+      <video id="video-player" controls playsinline preload="auto"></video>
+    </div>
+
+    <div id="watch-resizer" class="resizer"></div>
+
+    <aside id="chat-sidebar" class="chat-sidebar">
+      <div class="chat-header">
+        <span class="chat-header-title">Chat Replay</span>
+        <span id="chat-count-label" class="chat-header-count">0 messages</span>
+      </div>
+      <div id="chat-messages" class="chat-messages">
+        <div class="chat-empty">No chat replay loaded for this stream.</div>
+      </div>
+      <button id="chat-paused-pill" class="chat-paused-pill">
+        <span>Jump to present</span>
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+    </aside>
+  </div>
+
+  <!-- ================= DOWNLOAD MODAL ================= -->
+  <div id="download-modal" class="modal-backdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Download Stream or Chat</h3>
+        <button class="modal-close" data-close-modal="download-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="field-label" for="dl-url">YouTube or Kick URL</label>
+        <div class="input-row">
+          <input id="dl-url" type="url" class="text-input" placeholder="https://www.youtube.com/watch?v=... or https://kick.com/...">
+          <button id="btn-probe-url" class="btn btn-ghost">Fetch Info</button>
+        </div>
+
+        <div id="probe-preview" class="probe-preview hidden">
+          <img id="probe-thumb" class="probe-thumb" alt="">
+          <div class="probe-info">
+            <div id="probe-platform" class="probe-platform"></div>
+            <div id="probe-title" class="probe-title"></div>
+            <div id="probe-meta" class="probe-meta"></div>
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div>
+            <label class="field-label" for="dl-mode">Download Mode</label>
+            <select id="dl-mode" class="select-input full">
+              <option value="video_chat">Video + Live Chat</option>
+              <option value="chat_only">Chat Replay Only</option>
+              <option value="video_only">Video Only</option>
+            </select>
+          </div>
+          <div id="dl-quality-group">
+            <label class="field-label" for="dl-quality">Max Video Quality</label>
+            <select id="dl-quality" class="select-input full">
+              <option value="best">Best Available</option>
+              <option value="2160">4K (2160p)</option>
+              <option value="1440">1440p</option>
+              <option value="1080">1080p</option>
+              <option value="720">720p</option>
+            </select>
+          </div>
+          <div id="dl-format-group">
+            <label class="field-label" for="dl-format">Container</label>
+            <select id="dl-format" class="select-input full">
+              <option value="mkv">MKV (Recommended)</option>
+              <option value="mp4">MP4</option>
+              <option value="webm">WebM</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="dl-target-group" class="hidden">
+          <label class="field-label" for="dl-target-video">Attach Chat to Existing Video (Optional)</label>
+          <select id="dl-target-video" class="select-input full">
+            <option value="">Save standalone chat file</option>
+          </select>
+        </div>
+
+        <div id="dl-error" class="form-error hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <span class="modal-hint" id="dl-dest-hint"></span>
+        <div class="modal-footer-btns">
+          <button class="btn btn-ghost" data-close-modal="download-modal">Cancel</button>
+          <button id="btn-start-download" class="btn btn-primary">Add to Queue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= DOWNLOADS QUEUE DRAWER ================= -->
+  <div id="queue-drawer" class="drawer-backdrop">
+    <div class="drawer-panel">
+      <div class="modal-header">
+        <h3>Download Queue</h3>
+        <button class="modal-close" data-close-modal="queue-drawer">&times;</button>
+      </div>
+      <div id="queue-list" class="queue-list"></div>
+    </div>
+  </div>
+
+  <!-- ================= PAIR CHAT MODAL ================= -->
+  <div id="pair-modal" class="modal-backdrop">
+    <div class="modal-card modal-sm">
+      <div class="modal-header">
+        <h3>Pair Chat Replay</h3>
+        <button class="modal-close" data-close-modal="pair-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="pair-video-name" class="muted-subtitle"></div>
+        <label class="field-label" for="pair-chat-select">Choose Chat File in Library</label>
+        <select id="pair-chat-select" class="select-input full"></select>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-unpair-chat" class="btn btn-ghost">Detach</button>
+        <div class="modal-footer-btns">
+          <button class="btn btn-ghost" data-close-modal="pair-modal">Cancel</button>
+          <button id="btn-save-pair" class="btn btn-primary">Save Pairing</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= MERGE CHATS MODAL ================= -->
+  <div id="merge-modal" class="modal-backdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Merge Multi-Part Chats</h3>
+        <button class="modal-close" data-close-modal="merge-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="field-label" for="merge-part1">Part 1 Chat (.json)</label>
+        <select id="merge-part1" class="select-input full"></select>
+
+        <label class="field-label" for="merge-part2">Part 2 Chat (.json)</label>
+        <select id="merge-part2" class="select-input full"></select>
+
+        <div class="form-grid">
+          <div>
+            <label class="field-label" for="merge-offset">Part 2 Start Offset (seconds)</label>
+            <input id="merge-offset" type="number" step="1" min="0" class="text-input" placeholder="e.g. 8604">
+          </div>
+          <div>
+            <label class="field-label" for="merge-target-video">Pair Merged Chat With Video</label>
+            <select id="merge-target-video" class="select-input full"></select>
+          </div>
+        </div>
+        <div id="merge-status" class="form-error hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <span class="modal-hint">Combines and sorts messages cleanly inside DOWNLOAD_DIR.</span>
+        <div class="modal-footer-btns">
+          <button class="btn btn-ghost" data-close-modal="merge-modal">Cancel</button>
+          <button id="btn-run-merge" class="btn btn-primary">Merge Chats</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= SETTINGS (.ENV) MODAL ================= -->
+  <div id="settings-modal" class="modal-backdrop">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Configuration (.env)</h3>
+        <button class="modal-close" data-close-modal="settings-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="field-label" for="set-download-dir">Download & Library Directory (DOWNLOAD_DIR)</label>
+        <input id="set-download-dir" type="text" class="text-input">
+
+        <div class="form-grid">
+          <div>
+            <label class="field-label" for="set-yt-quality">Default YT Quality</label>
+            <select id="set-yt-quality" class="select-input full">
+              <option value="bestvideo+bestaudio/best">Best Available</option>
+              <option value="bestvideo[height<=2160]+bestaudio/best[height<=2160]/best">4K (2160p)</option>
+              <option value="bestvideo[height<=1440]+bestaudio/best[height<=1440]/best">1440p</option>
+              <option value="bestvideo[height<=1080]+bestaudio/best[height<=1080]/best">1080p</option>
+              <option value="bestvideo[height<=720]+bestaudio/best[height<=720]/best">720p</option>
+              <option value="bestvideo[height<=480]+bestaudio/best[height<=480]/best">480p</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" for="set-yt-format">Default Format</label>
+            <select id="set-yt-format" class="select-input full">
+              <option value="mkv">mkv</option>
+              <option value="mp4">mp4</option>
+              <option value="webm">webm</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" for="set-yt-frags">Concurrent Fragments</label>
+            <input id="set-yt-frags" type="number" min="1" max="16" class="text-input">
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <div>
+            <label class="field-label" for="set-kick-workers">Kick Chat Workers</label>
+            <input id="set-kick-workers" type="number" min="1" max="5" class="text-input">
+          </div>
+          <div>
+            <label class="field-label" for="set-kick-delay">Kick Request Delay (s)</label>
+            <input id="set-kick-delay" type="number" step="0.05" min="0.05" class="text-input">
+          </div>
+          <div>
+            <label class="field-label" for="set-thumb-seek">Thumbnail Seek (s)</label>
+            <input id="set-thumb-seek" type="number" min="1" class="text-input">
+          </div>
+        </div>
+        <div id="settings-status" class="form-error hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <span class="modal-hint">Saved directly to .env (gitignored).</span>
+        <div class="modal-footer-btns">
+          <button class="btn btn-ghost" data-close-modal="settings-modal">Cancel</button>
+          <button id="btn-save-settings" class="btn btn-primary">Save Settings</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden local file inputs for fallback drag & drop / Open Local -->
+  <input id="local-video-input" type="file" accept=".mkv,.mp4,.webm,.m4v,.mov" class="hidden">
+  <input id="local-chat-input" type="file" accept=".json" class="hidden">
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
