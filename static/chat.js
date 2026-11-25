@@ -123,20 +123,34 @@ export class ChatController {
   }
 
   shouldLoadImages() {
-    return this.loadExternalImages && !this.circuitBroken && navigator.onLine;
+    return this.loadExternalImages && !this.circuitBroken;
   }
 
   updateImagesButton() {
     if (!this.loadExternalImages) {
       this.imagesLabelEl.textContent = 'Images: Off';
       this.imagesBtnEl.classList.remove('active');
-    } else if (this.circuitBroken || !navigator.onLine) {
-      this.imagesLabelEl.textContent = 'Images: Offline';
+    } else if (this.circuitBroken) {
+      this.imagesLabelEl.textContent = 'Images: Error';
       this.imagesBtnEl.classList.remove('active');
+    } else if (!navigator.onLine) {
+      this.imagesLabelEl.textContent = 'Images: Cached';
+      this.imagesBtnEl.classList.add('active');
     } else {
       this.imagesLabelEl.textContent = 'Images: On';
       this.imagesBtnEl.classList.add('active');
     }
+  }
+
+  _cachedImgSrc(rawUrl, kickUser = '') {
+    const suffix = navigator.onLine ? '' : '&cached=1';
+    if (rawUrl) {
+      return `/api/img?u=${encodeURIComponent(rawUrl)}${suffix}`;
+    }
+    if (kickUser) {
+      return `/api/img?kick_user=${encodeURIComponent(kickUser)}${suffix}`;
+    }
+    return '';
   }
 
   toggleExternalImages() {
@@ -289,17 +303,17 @@ export class ChatController {
     const initial = (author.startsWith('@') ? author.slice(1, 2) : author.slice(0, 1)).toUpperCase() || '?';
     avatar.style.backgroundColor = getAvatarColor(author);
 
-    const avatarSrc =
-      msg.p ||
-      (this.isKickChat && author.startsWith('@') && author.length > 1
-        ? `/api/kick-avatar?username=${encodeURIComponent(author.slice(1))}`
+    const avatarSrc = msg.p
+      ? this._cachedImgSrc(msg.p)
+      : (this.isKickChat && author.startsWith('@') && author.length > 1
+        ? this._cachedImgSrc('', author.slice(1))
         : '');
 
     if (allowExternal && avatarSrc) {
       avatar.appendChild(this._createExternalImage({
         src: avatarSrc,
         lazy: true,
-        trackFailures: Boolean(msg.p),
+        trackFailures: navigator.onLine && Boolean(msg.p),
         onFallback: (img) => {
           img.remove();
           avatar.textContent = initial;
@@ -327,9 +341,10 @@ export class ChatController {
 
     if (allowExternal && msg.bi) {
       authorSpan.appendChild(this._createExternalImage({
-        src: msg.bi,
+        src: this._cachedImgSrc(msg.bi),
         className: 'member-badge-icon',
         title: msg.b || 'Badge',
+        trackFailures: navigator.onLine,
         onFallback: (img) => img.remove(),
       }));
     }
@@ -343,10 +358,11 @@ export class ChatController {
       } else if (run.e) {
         if (allowExternal && run.u) {
           textSpan.appendChild(this._createExternalImage({
-            src: run.u,
+            src: this._cachedImgSrc(run.u),
             className: 'chat-emoji',
             alt: run.e,
             title: run.e,
+            trackFailures: navigator.onLine,
             onFallback: (img) => img.replaceWith(document.createTextNode(run.e)),
           }));
         } else {

@@ -84,6 +84,9 @@ def _normalize_kick_avatar_url(url: str) -> str:
     return ""
 
 
+_KICK_MISS_SENTINEL = "__MISS__"
+
+
 class KickAvatarResolver:
     """Thread-safe resolver and disk cache for permanent Kick user profile images."""
 
@@ -109,22 +112,30 @@ class KickAvatarResolver:
                     with open(path, "r", encoding="utf-8") as f:
                         raw = json.load(f)
                     if isinstance(raw, dict):
-                        self._cache = {
-                            str(k): _normalize_kick_avatar_url(str(v))
-                            for k, v in raw.items()
-                            if _normalize_kick_avatar_url(str(v))
-                        }
+                        for k, v in raw.items():
+                            ks = str(k)
+                            vs = str(v)
+                            if vs == _KICK_MISS_SENTINEL:
+                                self._misses.add(ks)
+                            else:
+                                norm = _normalize_kick_avatar_url(vs)
+                                if norm:
+                                    self._cache[ks] = norm
                 except Exception:
                     self._cache = {}
+                    self._misses = set()
 
     def flush(self) -> None:
         with self._lock:
             if not self._cache_path:
                 return
             os.makedirs(os.path.dirname(self._cache_path), exist_ok=True)
+            payload = dict(self._cache)
+            for mk in self._misses:
+                payload.setdefault(mk, _KICK_MISS_SENTINEL)
             tmp_path = self._cache_path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(self._cache, f, separators=(",", ":"))
+                json.dump(payload, f, separators=(",", ":"))
             os.replace(tmp_path, self._cache_path)
 
     def get_cached(self, key: str) -> str:
@@ -167,7 +178,13 @@ class KickAvatarResolver:
                 return "", False
         return "", False
 
-    def resolve(self, username: str = "", slug: str = "", persist: bool = True) -> str:
+    def resolve(
+        self,
+        username: str = "",
+        slug: str = "",
+        persist: bool = True,
+        cached_only: bool = False,
+    ) -> str:
         clean_user = (username or "").strip().lstrip("@")
         key = (slug or clean_user).strip().lower()
         if not key:
@@ -178,7 +195,7 @@ class KickAvatarResolver:
                 return self._cache[key]
             if clean_user and clean_user.lower() in self._cache:
                 return self._cache[clean_user.lower()]
-            if key in self._misses:
+            if cached_only or key in self._misses or (clean_user and clean_user.lower() in self._misses):
                 return ""
             wait_evt = self._inflight.get(key)
             if wait_evt is None:
@@ -195,15 +212,18 @@ class KickAvatarResolver:
 
         try:
             url, rate_limited = self._fetch_remote(clean_user, slug)
+            should_flush = False
             with self._lock:
                 if url:
                     self._cache[key] = url
                     if clean_user:
                         self._cache[clean_user.lower()] = url
                     self._misses.discard(key)
+                    should_flush = True
                 elif not rate_limited:
                     self._misses.add(key)
-            if url and persist:
+                    should_flush = True
+            if should_flush and persist:
                 try:
                     self.flush()
                 except Exception:

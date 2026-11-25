@@ -13,6 +13,7 @@ from osp.chat import merge_chat_files, parse_chat_file
 from osp.config import AppConfig, ROOT_DIR, load_config, save_env_updates
 from osp.downloader import DownloadManager, KickAvatarResolver, probe_url
 from osp.health import check_dependencies
+from osp.image_cache import LocalImageCache
 from osp.library import MediaLibrary, is_safe_subpath
 
 STATIC_DIR = os.path.join(ROOT_DIR, "static")
@@ -64,6 +65,7 @@ class AppContext:
         self.cfg = cfg
         self.library = MediaLibrary(cfg)
         self.kick_avatars = KickAvatarResolver(cfg.cache_dir)
+        self.image_cache = LocalImageCache(cfg.images_cache_dir)
         self.downloads = DownloadManager(cfg, self.library, kick_avatars=self.kick_avatars)
         self.library.scan()
 
@@ -74,6 +76,7 @@ class AppContext:
             self.library.reload_config(new_cfg)
             self.downloads.update_config(new_cfg)
             self.kick_avatars.set_cache_dir(new_cfg.cache_dir)
+            self.image_cache.set_dir(new_cfg.images_cache_dir)
             self.library.scan()
             return new_cfg
 
@@ -113,12 +116,25 @@ class StudioHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(size))
         self.send_header("Cache-Control", cache_header)
         self.end_headers()
-        with open(abs_path, "rb") as f:
-            while True:
-                chunk = f.read(256 * 1024)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
+        try:
+            with open(abs_path, "rb") as f:
+                while True:
+                    chunk = f.read(256 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def _serve_cached_image(self, img_url: str, cached_only: bool = False) -> None:
+        entry = self.context.image_cache.get_or_fetch(img_url, cached_only=cached_only) if img_url else None
+        if not entry:
+            self.send_response(404)
+            self.send_header("Cache-Control", "no-store" if cached_only else "public, max-age=300")
+            self.end_headers()
+            return
+        file_path, content_type = entry
+        self._send_file_bytes(file_path, content_type, cache_header="public, max-age=31536000, immutable")
 
     def _handle_stream(self, query: dict, head_only: bool = False) -> None:
         vid = (query.get("id") or [""])[0]
@@ -226,22 +242,33 @@ class StudioHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_json(500, {"error": str(exc)})
             return
 
+        if parsed.path == "/api/img":
+            cached_only = (query.get("cached") or ["0"])[0] == "1"
+            raw_url = (query.get("u") or [""])[0].strip()
+            kick_user = (query.get("kick_user") or [""])[0].strip().lstrip("@")
+            if kick_user:
+                if len(kick_user) > 64 or "/" in kick_user or "\\" in kick_user:
+                    self.send_response(400)
+                    self.end_headers()
+                    return
+                raw_url = self.context.kick_avatars.resolve(kick_user, cached_only=cached_only)
+            if not raw_url:
+                self.send_response(404)
+                self.send_header("Cache-Control", "no-store" if cached_only else "public, max-age=300")
+                self.end_headers()
+                return
+            self._serve_cached_image(raw_url, cached_only=cached_only)
+            return
+
         if parsed.path == "/api/kick-avatar":
             username = (query.get("username") or [""])[0].strip().lstrip("@")
+            cached_only = (query.get("cached") or ["0"])[0] == "1"
             if not username or len(username) > 64 or "/" in username or "\\" in username:
                 self.send_response(400)
                 self.end_headers()
                 return
-            avatar_url = self.context.kick_avatars.resolve(username)
-            if avatar_url:
-                self.send_response(302)
-                self.send_header("Location", avatar_url)
-                self.send_header("Cache-Control", "public, max-age=86400")
-                self.end_headers()
-            else:
-                self.send_response(404)
-                self.send_header("Cache-Control", "public, max-age=300")
-                self.end_headers()
+            avatar_url = self.context.kick_avatars.resolve(username, cached_only=cached_only)
+            self._serve_cached_image(avatar_url, cached_only=cached_only)
             return
 
         if parsed.path == "/api/downloads":

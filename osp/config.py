@@ -116,6 +116,10 @@ class AppConfig:
         return os.path.join(self.cache_dir, "thumbs")
 
     @property
+    def images_cache_dir(self) -> str:
+        return os.path.join(self.cache_dir, "images")
+
+    @property
     def library_cache_path(self) -> str:
         return os.path.join(self.cache_dir, "library.json")
 
@@ -136,6 +140,7 @@ class AppConfig:
             raise ConfigError(f"DOWNLOAD_DIR does not exist: {self.download_dir}")
         os.makedirs(self.cache_dir, exist_ok=True)
         os.makedirs(self.thumbs_dir, exist_ok=True)
+        os.makedirs(self.images_cache_dir, exist_ok=True)
 
     def to_env_dict(self) -> dict:
         return {
