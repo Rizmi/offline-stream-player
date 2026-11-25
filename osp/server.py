@@ -11,7 +11,7 @@ import urllib.parse
 
 from osp.chat import merge_chat_files, parse_chat_file
 from osp.config import AppConfig, ROOT_DIR, load_config, save_env_updates
-from osp.downloader import DownloadManager, probe_url
+from osp.downloader import DownloadManager, KickAvatarResolver, probe_url
 from osp.health import check_dependencies
 from osp.library import MediaLibrary, is_safe_subpath
 
@@ -63,7 +63,8 @@ class AppContext:
         self.lock = threading.RLock()
         self.cfg = cfg
         self.library = MediaLibrary(cfg)
-        self.downloads = DownloadManager(cfg, self.library)
+        self.kick_avatars = KickAvatarResolver(cfg.cache_dir)
+        self.downloads = DownloadManager(cfg, self.library, kick_avatars=self.kick_avatars)
         self.library.scan()
 
     def reload_settings(self, updates: dict) -> AppConfig:
@@ -72,6 +73,7 @@ class AppContext:
             self.cfg = new_cfg
             self.library.reload_config(new_cfg)
             self.downloads.update_config(new_cfg)
+            self.kick_avatars.set_cache_dir(new_cfg.cache_dir)
             self.library.scan()
             return new_cfg
 
@@ -222,6 +224,24 @@ class StudioHandler(http.server.SimpleHTTPRequestHandler):
                 self._send_json(200, parse_chat_file(chat_abs))
             except Exception as exc:
                 self._send_json(500, {"error": str(exc)})
+            return
+
+        if parsed.path == "/api/kick-avatar":
+            username = (query.get("username") or [""])[0].strip().lstrip("@")
+            if not username or len(username) > 64 or "/" in username or "\\" in username:
+                self.send_response(400)
+                self.end_headers()
+                return
+            avatar_url = self.context.kick_avatars.resolve(username)
+            if avatar_url:
+                self.send_response(302)
+                self.send_header("Location", avatar_url)
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
+            else:
+                self.send_response(404)
+                self.send_header("Cache-Control", "public, max-age=300")
+                self.end_headers()
             return
 
         if parsed.path == "/api/downloads":

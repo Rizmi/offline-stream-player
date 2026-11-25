@@ -55,6 +55,7 @@ export class ChatController {
     this.onOffsetChange = onOffsetChange;
 
     this.messages = [];
+    this.isKickChat = false;
     this.currentIndex = 0;
     this.isUserScrolledUp = false;
     this.loadExternalImages = localStorage.getItem(IMAGES_STORAGE_KEY) === 'true';
@@ -149,9 +150,20 @@ export class ChatController {
 
   clear() {
     this.messages = [];
+    this.isKickChat = false;
     this.currentIndex = 0;
     this.countEl.textContent = '0 messages';
     this.containerEl.innerHTML = '<div class="chat-empty">No chat replay loaded for this stream.</div>';
+  }
+
+  _detectKickChat(messages) {
+    return messages.some(
+      (m) =>
+        m &&
+        ('sc' in m ||
+          (typeof m.bi === 'string' && m.bi.includes('kick.com')) ||
+          (Array.isArray(m.r) && m.r.some((r) => typeof r?.u === 'string' && r.u.includes('kick.com'))))
+    );
   }
 
   async loadFromServer(chatId, currentSecProvider) {
@@ -160,6 +172,7 @@ export class ChatController {
     const res = await fetch(`/api/chat?id=${encodeURIComponent(chatId)}`);
     if (!res.ok) throw new Error('Failed to fetch chat replay');
     this.messages = await res.json();
+    this.isKickChat = this._detectKickChat(this.messages);
     this.countEl.textContent = `${this.messages.length.toLocaleString()} messages`;
     this.resync(currentSecProvider());
   }
@@ -225,6 +238,7 @@ export class ChatController {
       this.messages = parsed;
     }
     this.messages.sort((a, b) => a.o - b.o);
+    this.isKickChat = this._detectKickChat(this.messages);
     this.countEl.textContent = `${this.messages.length.toLocaleString()} messages`;
     this.resync(currentSecProvider());
   }
@@ -240,7 +254,7 @@ export class ChatController {
     return low;
   }
 
-  _createExternalImage({ src, className = '', title = '', alt = '', lazy = false, onFallback }) {
+  _createExternalImage({ src, className = '', title = '', alt = '', lazy = false, trackFailures = true, onFallback }) {
     const img = document.createElement('img');
     if (className) img.className = className;
     if (title) img.title = title;
@@ -248,13 +262,15 @@ export class ChatController {
     if (lazy) img.loading = 'lazy';
     img.referrerPolicy = 'no-referrer';
     img.onload = () => {
-      this.consecutiveFailures = 0;
+      if (trackFailures) this.consecutiveFailures = 0;
     };
     img.onerror = () => {
-      this.consecutiveFailures++;
-      if (this.consecutiveFailures >= MAX_CONSECUTIVE_IMG_FAILURES && !this.circuitBroken) {
-        this.circuitBroken = true;
-        this.updateImagesButton();
+      if (trackFailures) {
+        this.consecutiveFailures++;
+        if (this.consecutiveFailures >= MAX_CONSECUTIVE_IMG_FAILURES && !this.circuitBroken) {
+          this.circuitBroken = true;
+          this.updateImagesButton();
+        }
       }
       onFallback(img);
     };
@@ -273,10 +289,17 @@ export class ChatController {
     const initial = (author.startsWith('@') ? author.slice(1, 2) : author.slice(0, 1)).toUpperCase() || '?';
     avatar.style.backgroundColor = getAvatarColor(author);
 
-    if (allowExternal && msg.p) {
+    const avatarSrc =
+      msg.p ||
+      (this.isKickChat && author.startsWith('@') && author.length > 1
+        ? `/api/kick-avatar?username=${encodeURIComponent(author.slice(1))}`
+        : '');
+
+    if (allowExternal && avatarSrc) {
       avatar.appendChild(this._createExternalImage({
-        src: msg.p,
+        src: avatarSrc,
         lazy: true,
+        trackFailures: Boolean(msg.p),
         onFallback: (img) => {
           img.remove();
           avatar.textContent = initial;

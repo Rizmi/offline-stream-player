@@ -1,7 +1,7 @@
 """Unified YouTube & Kick media/chat downloader with job queue and CLI entrypoint."""
 
 import argparse
-from collections import deque
+from collections import Counter, deque
 import concurrent.futures
 import datetime
 from datetime import timezone
@@ -70,6 +70,150 @@ def _normalize_ytdlp_field(val: str, invalid: tuple = ("NA", "None", "null")) ->
     if not cleaned or cleaned in invalid:
         return ""
     return cleaned
+
+
+def _normalize_kick_avatar_url(url: str) -> str:
+    url = (url or "").strip()
+    if not url:
+        return ""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.netloc.endswith("amazonaws.com") and parsed.path.startswith("/images/"):
+        return f"https://files.kick.com{parsed.path}"
+    if parsed.scheme in ("http", "https"):
+        return url
+    return ""
+
+
+class KickAvatarResolver:
+    """Thread-safe resolver and disk cache for permanent Kick user profile images."""
+
+    def __init__(self, cache_dir: str):
+        self._lock = threading.RLock()
+        self._cache_path = ""
+        self._cache = {}
+        self._misses = set()
+        self._inflight = {}
+        self._cooldown_until = 0.0
+        self.set_cache_dir(cache_dir)
+
+    def set_cache_dir(self, cache_dir: str) -> None:
+        path = os.path.join(cache_dir, "kick_avatars.json") if cache_dir else ""
+        with self._lock:
+            if path == self._cache_path:
+                return
+            self._cache_path = path
+            self._cache = {}
+            self._misses = set()
+            if path and os.path.isfile(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        raw = json.load(f)
+                    if isinstance(raw, dict):
+                        self._cache = {
+                            str(k): _normalize_kick_avatar_url(str(v))
+                            for k, v in raw.items()
+                            if _normalize_kick_avatar_url(str(v))
+                        }
+                except Exception:
+                    self._cache = {}
+
+    def flush(self) -> None:
+        with self._lock:
+            if not self._cache_path:
+                return
+            os.makedirs(os.path.dirname(self._cache_path), exist_ok=True)
+            tmp_path = self._cache_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self._cache, f, separators=(",", ":"))
+            os.replace(tmp_path, self._cache_path)
+
+    def get_cached(self, key: str) -> str:
+        with self._lock:
+            return self._cache.get(key.lower(), "")
+
+    def _fetch_remote(self, username: str, slug: str) -> tuple:
+        clean_user = (username or "").strip().lstrip("@")
+        chan_slug = (slug or re.sub(r"_+", "-", clean_user.lower())).strip()
+        candidates = []
+        if chan_slug:
+            candidates.append((f"https://kick.com/api/v2/channels/{urllib.parse.quote(chan_slug)}", "channel"))
+        if clean_user:
+            candidates.append((f"https://kick.com/api/v1/users/{urllib.parse.quote(clean_user)}", "user"))
+
+        for target_url, kind in candidates:
+            with self._lock:
+                wait_left = self._cooldown_until - time.monotonic()
+            if wait_left > 0:
+                return "", True
+            req = urllib.request.Request(target_url, headers=_KICK_HEADERS)
+            try:
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                raw_url = (
+                    (data.get("user") or {}).get("profile_pic")
+                    if kind == "channel"
+                    else (data.get("profilepic") or data.get("profile_pic"))
+                )
+                return _normalize_kick_avatar_url(raw_url or ""), False
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    continue
+                if exc.code in (403, 429):
+                    with self._lock:
+                        self._cooldown_until = max(self._cooldown_until, time.monotonic() + 15.0)
+                    return "", True
+                return "", False
+            except Exception:
+                return "", False
+        return "", False
+
+    def resolve(self, username: str = "", slug: str = "", persist: bool = True) -> str:
+        clean_user = (username or "").strip().lstrip("@")
+        key = (slug or clean_user).strip().lower()
+        if not key:
+            return ""
+
+        with self._lock:
+            if key in self._cache:
+                return self._cache[key]
+            if clean_user and clean_user.lower() in self._cache:
+                return self._cache[clean_user.lower()]
+            if key in self._misses:
+                return ""
+            wait_evt = self._inflight.get(key)
+            if wait_evt is None:
+                wait_evt = threading.Event()
+                self._inflight[key] = wait_evt
+                owner = True
+            else:
+                owner = False
+
+        if not owner:
+            wait_evt.wait(timeout=10.0)
+            with self._lock:
+                return self._cache.get(key, "")
+
+        try:
+            url, rate_limited = self._fetch_remote(clean_user, slug)
+            with self._lock:
+                if url:
+                    self._cache[key] = url
+                    if clean_user:
+                        self._cache[clean_user.lower()] = url
+                    self._misses.discard(key)
+                elif not rate_limited:
+                    self._misses.add(key)
+            if url and persist:
+                try:
+                    self.flush()
+                except Exception:
+                    pass
+            return url
+        finally:
+            with self._lock:
+                evt = self._inflight.pop(key, None)
+                if evt:
+                    evt.set()
 
 
 def _ytdlp_env(download_dir: str) -> dict:
@@ -175,6 +319,7 @@ def download_kick_chat(
     log_cb: Optional[Callable[[str], None]] = None,
     progress_cb: Optional[Callable[[float, str], None]] = None,
     cancel_event: Optional[threading.Event] = None,
+    avatar_resolver: Optional[KickAvatarResolver] = None,
 ) -> dict:
     """Download full Kick VOD chat replay with rate-limited cursor pagination."""
     os.makedirs(dest_dir, exist_ok=True)
@@ -318,7 +463,7 @@ def download_kick_chat(
             if cancelled.is_set():
                 raise InterruptedError("Download cancelled")
             done_count += 1
-            pct = (done_count / max(1, len(slices))) * 100.0
+            pct = (done_count / max(1, len(slices))) * 88.0
             report(pct, f"Kick chat segment {done_count}/{len(slices)}")
             log(f"Fetched chat segment {done_count}/{len(slices)} ({len(res)} msgs)")
             if err:
@@ -335,6 +480,57 @@ def download_kick_chat(
     if failed_slices:
         log(f"Warning: {len(failed_slices)}/{len(slices)} chat segments returned errors")
 
+    resolver = avatar_resolver or KickAvatarResolver(cfg.cache_dir)
+    direct_avatars = {}
+    sender_counts = Counter()
+    sender_slugs = {}
+    for m in all_raw_msgs:
+        sender = m.get("sender") or {}
+        uname = (sender.get("username") or "").strip()
+        slug = (sender.get("slug") or "").strip().lower()
+        key = (slug or uname).lower()
+        if not key:
+            continue
+        sender_counts[key] += 1
+        if uname and key not in sender_slugs:
+            sender_slugs[key] = (uname, slug)
+        raw_pic = sender.get("profile_pic") or sender.get("profile_picture") or sender.get("profilepic")
+        if raw_pic and key not in direct_avatars:
+            norm = _normalize_kick_avatar_url(str(raw_pic))
+            if norm:
+                direct_avatars[key] = norm
+
+    uncached_senders = [
+        (key, *sender_slugs[key])
+        for key, _ in sender_counts.most_common(200)
+        if key in sender_slugs and key not in direct_avatars and not resolver.get_cached(key)
+    ]
+    if uncached_senders and not cancelled.is_set():
+        total_av = len(uncached_senders)
+        log(f"Fetching profile avatars for {total_av} Kick chatters...")
+        av_done = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as av_exec:
+            futs = [
+                av_exec.submit(resolver.resolve, uname, slug, False)
+                for _, uname, slug in uncached_senders
+            ]
+            for fut in concurrent.futures.as_completed(futs):
+                if cancelled.is_set():
+                    break
+                try:
+                    fut.result()
+                except Exception:
+                    pass
+                av_done += 1
+                if av_done % 10 == 0 or av_done == total_av:
+                    report(88.0 + (av_done / max(1, total_av)) * 12.0, f"Fetching Kick avatars ({av_done}/{total_av})")
+        try:
+            resolver.flush()
+        except Exception:
+            pass
+    else:
+        report(100.0, "Formatting Kick chat...")
+
     formatted_msgs = []
     for m in all_raw_msgs:
         try:
@@ -344,7 +540,15 @@ def download_kick_chat(
             offset_ms = 0
 
         sender = m.get("sender") or {}
-        author_name = "@" + (sender.get("username") or "Anonymous")
+        raw_uname = (sender.get("username") or "").strip()
+        raw_slug = (sender.get("slug") or "").strip().lower()
+        sender_key = (raw_slug or raw_uname).lower()
+        author_name = "@" + (raw_uname or "Anonymous")
+        avatar_url = (
+            direct_avatars.get(sender_key)
+            or (resolver.get_cached(sender_key) if sender_key else "")
+            or (resolver.get_cached(raw_uname.lower()) if raw_uname else "")
+        )
         ident = sender.get("identity") or {}
 
         badge_icon = ""
@@ -376,7 +580,7 @@ def download_kick_chat(
         formatted_msgs.append({
             "o": offset_ms,
             "a": author_name,
-            "p": "",
+            "p": avatar_url,
             "m": is_member,
             "b": badge_title,
             "bi": badge_icon,
@@ -401,9 +605,15 @@ def download_kick_chat(
 class DownloadManager:
     """Thread-safe background job queue for YouTube and Kick downloads."""
 
-    def __init__(self, cfg: AppConfig, library: MediaLibrary):
+    def __init__(
+        self,
+        cfg: AppConfig,
+        library: MediaLibrary,
+        kick_avatars: Optional[KickAvatarResolver] = None,
+    ):
         self.cfg = cfg
         self.library = library
+        self._kick_avatars = kick_avatars or KickAvatarResolver(cfg.cache_dir)
         self._lock = threading.RLock()
         self._jobs = {}
         self._job_order = []
@@ -415,6 +625,7 @@ class DownloadManager:
     def update_config(self, cfg: AppConfig) -> None:
         with self._lock:
             self.cfg = cfg
+            self._kick_avatars.set_cache_dir(cfg.cache_dir)
 
     def list_jobs(self) -> list:
         with self._lock:
@@ -794,6 +1005,7 @@ class DownloadManager:
                         log_cb=lambda msg: self._append_log(job, msg),
                         progress_cb=lambda pct, phase: self._update_progress(job, pct * chat_scale, phase),
                         cancel_event=job["cancel_event"],
+                        avatar_resolver=self._kick_avatars,
                     )
                     with self._lock:
                         job["title"] = chat_res.get("title") or job["title"]
