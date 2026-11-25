@@ -1109,12 +1109,66 @@ html, body {
   transition: width 0.25s;
 }
 
+.job-bar-fill.indeterminate {
+  background-image: linear-gradient(
+    -45deg,
+    rgba(255, 255, 255, 0.22) 25%,
+    transparent 25%,
+    transparent 50%,
+    rgba(255, 255, 255, 0.22) 50%,
+    rgba(255, 255, 255, 0.22) 75%,
+    transparent 75%,
+    transparent
+  );
+  background-size: 20px 20px;
+  animation: osp-bar-stripes 0.85s linear infinite;
+}
+
+@keyframes osp-bar-stripes {
+  from { background-position: 0 0; }
+  to { background-position: 20px 0; }
+}
+
 .job-meta {
   display: flex;
   justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
   font-family: var(--mono);
   font-size: 11px;
   color: var(--text-secondary);
+}
+
+.job-meta-left {
+  min-width: 0;
+  word-break: break-word;
+}
+
+.job-meta-right {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.job-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.job-logs {
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  max-height: 140px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .toast {

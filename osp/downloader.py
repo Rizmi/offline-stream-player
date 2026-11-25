@@ -25,6 +25,9 @@ from osp.library import MediaLibrary
 _YT_PROGRESS_RE = re.compile(
     r"\[download\]\s+(\d+(?:\.\d+)?)%\s+of\s+~?(\S+)(?:\s+at\s+(\S+))?(?:\s+ETA\s+(\S+))?"
 )
+_OSP_PROG_RE = re.compile(r"^(?:\d+:\s*)?OSP_PROG\|(.*)$")
+_OSP_PP_RE = re.compile(r"^OSP_PP\|([^|]*)\|(.*)$")
+_FFMPEG_PROGRESS_RE = re.compile(r"size=\s*(\S+)\s+time=(\S+).*?speed=\s*(\S+)")
 _KICK_EMOTE_RE = re.compile(r"\[emote:(\d+):([^\]]+)\]")
 _KICK_HEADERS = {
     "User-Agent": (
@@ -44,11 +47,37 @@ def detect_platform(url: str) -> str:
     return "unknown"
 
 
+def _format_bytes_str(num_bytes: float) -> str:
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if num_bytes < 1024.0 or unit == "TiB":
+            return f"{num_bytes:.1f}{unit}" if unit != "B" else f"{int(num_bytes)}B"
+        num_bytes /= 1024.0
+    return ""
+
+
+def _parse_int_field(val: str) -> int:
+    val = (val or "").strip()
+    if not val or val in ("NA", "None", "null"):
+        return 0
+    try:
+        return int(float(val))
+    except ValueError:
+        return 0
+
+
+def _normalize_ytdlp_field(val: str, invalid: tuple = ("NA", "None", "null")) -> str:
+    cleaned = " ".join((val or "").split())
+    if not cleaned or cleaned in invalid:
+        return ""
+    return cleaned
+
+
 def _ytdlp_env(download_dir: str) -> dict:
     env = os.environ.copy()
     env["TMPDIR"] = download_dir
     env["TEMP"] = download_dir
     env["TMP"] = download_dir
+    env["PYTHONUNBUFFERED"] = "1"
     return env
 
 
@@ -60,7 +89,10 @@ def probe_url(url: str, cfg: AppConfig) -> dict:
         raise ValueError("Unsupported URL. Please enter a YouTube or Kick URL.")
 
     cfg.ensure_dirs()
-    cmd = ["yt-dlp", "-J", "--no-playlist", "--no-cache-dir", url]
+    cmd = ["yt-dlp", "-J", "--no-playlist", "--no-cache-dir"]
+    if platform == "youtube":
+        cmd.extend(["--remote-components", "ejs:github"])
+    cmd.append(url)
     proc = subprocess.run(
         cmd,
         stdout=subprocess.PIPE,
@@ -400,6 +432,7 @@ class DownloadManager:
             "status": job["status"],
             "phase": job["phase"],
             "progress": round(job["progress"], 1),
+            "indeterminate": bool(job.get("indeterminate", False)),
             "speed": job["speed"],
             "eta": job["eta"],
             "total_size": job["total_size"],
@@ -439,6 +472,7 @@ class DownloadManager:
             "status": "queued",
             "phase": "Queued",
             "progress": 0.0,
+            "indeterminate": False,
             "speed": "",
             "eta": "",
             "total_size": "",
@@ -505,7 +539,117 @@ class DownloadManager:
 
             self._run_job(job)
 
-    def _run_ytdlp(self, job: dict, cmd: list, dest_dir: str) -> list:
+    def _set_phase(
+        self,
+        job: dict,
+        phase: str,
+        min_progress: Optional[float] = None,
+        indeterminate: bool = True,
+        clear_rate: bool = True,
+    ) -> None:
+        with self._lock:
+            job["phase"] = phase
+            job["indeterminate"] = indeterminate
+            if min_progress is not None:
+                job["progress"] = max(job["progress"], min(100.0, min_progress))
+            if clear_rate:
+                job["speed"] = ""
+                job["eta"] = ""
+
+    def _apply_ytdlp_progress(
+        self,
+        job: dict,
+        payload: str,
+        progress_range: tuple,
+        state: dict,
+    ) -> None:
+        parts = payload.split("|", 8)
+        if len(parts) != 9:
+            return
+        prog_status, dl_raw, tot_raw, est_raw, speed_raw, eta_raw, vcodec_raw, acodec_raw, proto_raw = parts
+        prog_status = _normalize_ytdlp_field(prog_status)
+        dl_bytes = _parse_int_field(dl_raw)
+        tot_bytes = _parse_int_field(tot_raw) or _parse_int_field(est_raw)
+        speed = _normalize_ytdlp_field(speed_raw, ("Unknown B/s", "NA", "None", "null"))
+        eta = _normalize_ytdlp_field(eta_raw, ("Unknown", "NA", "None", "null"))
+        vcodec = _normalize_ytdlp_field(vcodec_raw)
+        acodec = _normalize_ytdlp_field(acodec_raw)
+        protocol = _normalize_ytdlp_field(proto_raw)
+
+        start_pct, end_pct = progress_range
+        split_mid = start_pct + (end_pct - start_pct) * 0.84
+        is_chat = "live_chat" in protocol
+        is_video_only = not is_chat and bool(vcodec and vcodec != "none") and (not acodec or acodec == "none")
+        is_audio_only = not is_chat and bool(acodec and acodec != "none") and (not vcodec or vcodec == "none")
+
+        if is_chat:
+            size_str = _format_bytes_str(dl_bytes)
+            with self._lock:
+                if job["mode"] != "chat_only":
+                    job["progress"] = max(job["progress"], min(end_pct, start_pct + 5.0))
+                if prog_status == "finished":
+                    job["total_size"] = size_str
+                    job["phase"] = f"Live chat downloaded ({size_str})" if size_str else "Live chat downloaded"
+                    job["indeterminate"] = False
+                    job["speed"] = ""
+                    job["eta"] = ""
+                else:
+                    job["total_size"] = size_str
+                    job["phase"] = f"Downloading live chat ({size_str})" if size_str else "Downloading live chat..."
+                    job["indeterminate"] = True
+                    job["speed"] = speed
+                    job["eta"] = eta
+            return
+
+        state["media_started"] = True
+        if is_video_only:
+            state["saw_split_video"] = True
+            label = "Downloading video"
+            t_start, t_end = start_pct, split_mid
+        elif is_audio_only:
+            label = "Downloading audio"
+            t_start, t_end = (split_mid, end_pct) if state["saw_split_video"] else (start_pct, end_pct)
+        else:
+            label = "Downloading media"
+            t_start, t_end = start_pct, end_pct
+
+        if prog_status == "finished":
+            frac = 1.0
+        elif tot_bytes > 0:
+            frac = min(1.0, max(0.0, dl_bytes / tot_bytes))
+        else:
+            frac = None
+
+        with self._lock:
+            if frac is not None:
+                mapped = t_start + frac * (t_end - t_start)
+                job["progress"] = max(job["progress"], min(end_pct, mapped))
+                job["indeterminate"] = False
+                if prog_status == "finished":
+                    done_str = _format_bytes_str(tot_bytes or dl_bytes)
+                    job["total_size"] = done_str
+                    job["phase"] = f"{label} complete ({done_str})" if done_str else f"{label} complete"
+                    job["speed"] = ""
+                    job["eta"] = ""
+                else:
+                    job["total_size"] = _format_bytes_str(tot_bytes)
+                    job["phase"] = f"{label} ({_format_bytes_str(dl_bytes)} / {job['total_size']})"
+                    job["speed"] = speed
+                    job["eta"] = eta
+            elif dl_bytes > 0:
+                job["total_size"] = _format_bytes_str(dl_bytes)
+                job["phase"] = f"{label} ({job['total_size']})"
+                job["indeterminate"] = True
+                job["speed"] = speed
+                job["eta"] = eta
+
+    def _run_ytdlp(
+        self,
+        job: dict,
+        cmd: list,
+        dest_dir: str,
+        progress_range: tuple = (0.0, 95.0),
+    ) -> list:
         created_paths = []
         popen_kwargs = {
             "stdout": subprocess.PIPE,
@@ -520,35 +664,90 @@ class DownloadManager:
         with self._lock:
             job["proc"] = proc
 
+        state = {"saw_split_video": False, "media_started": False}
+        postproc_labels = (
+            ("[Merger]", "Merging video & audio...", 96.0),
+            ("[VideoRemuxer]", "Remuxing media container...", 96.5),
+            ("[VideoConvertor]", "Converting media container...", 96.5),
+            ("[ExtractAudio]", "Extracting audio...", 96.5),
+            ("[Fixup", "Fixing media timestamps...", 97.0),
+            ("[Metadata]", "Writing metadata...", 97.5),
+            ("[EmbedSubtitle]", "Embedding subtitles...", 97.5),
+            ("[EmbedThumbnail]", "Embedding thumbnail...", 97.5),
+            ("Deleting original file", "Cleaning up temporary files...", 98.0),
+            ("[MoveFiles]", "Moving files to library...", 98.5),
+            ("Moving file ", "Moving files to library...", 98.5),
+        )
+
         try:
-            for raw_line in proc.stdout:
+            while True:
+                raw_line = proc.stdout.readline()
+                if not raw_line:
+                    break
                 if job["cancel_event"].is_set():
                     break
                 line = raw_line.strip()
                 if not line:
                     continue
 
-                m = _YT_PROGRESS_RE.search(line)
-                if m:
-                    with self._lock:
-                        job["progress"] = float(m.group(1))
-                        job["total_size"] = m.group(2) or ""
-                        job["speed"] = m.group(3) or ""
-                        job["eta"] = m.group(4) or ""
-                        job["phase"] = "Downloading media"
+                m_prog = _OSP_PROG_RE.match(line)
+                if m_prog:
+                    self._apply_ytdlp_progress(job, m_prog.group(1), progress_range, state)
                     continue
 
-                if "[Merger]" in line or "[Fixup" in line or "[ffmpeg]" in line.lower():
+                m_pp = _OSP_PP_RE.match(line)
+                if m_pp:
+                    pp_name = _normalize_ytdlp_field(m_pp.group(1))
+                    pp_status = _normalize_ytdlp_field(m_pp.group(2))
+                    if pp_name and pp_status != "finished":
+                        self._set_phase(job, f"Post-processing ({pp_name})...", min_progress=96.0)
+                    continue
+
+                m = _YT_PROGRESS_RE.search(line)
+                if m:
+                    start_pct, end_pct = progress_range
+                    raw_pct = min(100.0, max(0.0, float(m.group(1))))
+                    mapped = start_pct + (raw_pct / 100.0) * (end_pct - start_pct)
                     with self._lock:
-                        job["phase"] = "Remuxing / Merging streams..."
-                elif "Writing video subtitles" in line or "live_chat" in line:
+                        job["progress"] = max(job["progress"], min(end_pct, mapped))
+                        job["indeterminate"] = False
+                        job["total_size"] = m.group(2) or ""
+                        job["speed"] = _normalize_ytdlp_field(m.group(3) or "", ("Unknown B/s", "NA", "None"))
+                        job["eta"] = _normalize_ytdlp_field(m.group(4) or "", ("Unknown", "NA", "None"))
+                        job["phase"] = f"Downloading media ({job['total_size']})" if job["total_size"] else "Downloading media"
+                    continue
+
+                m_ff = _FFMPEG_PROGRESS_RE.search(line)
+                if m_ff:
                     with self._lock:
-                        job["phase"] = "Downloading live chat..."
-                elif line.startswith("AFTER_MOVE:"):
+                        job["indeterminate"] = True
+                        job["phase"] = f"Downloading stream ({m_ff.group(1)} @ {m_ff.group(2)})"
+                        job["speed"] = m_ff.group(3)
+                        job["eta"] = ""
+                    continue
+
+                if line.startswith("AFTER_MOVE:"):
                     path = line.split("AFTER_MOVE:", 1)[1].strip()
                     if path:
                         created_paths.append(path)
                     continue
+
+                matched_post = False
+                for token, phase_label, min_pct in postproc_labels:
+                    if token in line:
+                        self._set_phase(job, phase_label, min_progress=min_pct)
+                        matched_post = True
+                        break
+
+                if not matched_post:
+                    if "Writing video subtitles" in line or "Downloading subtitles:" in line or "[youtube_live_chat" in line:
+                        self._set_phase(job, "Downloading live chat...")
+                    elif "[download] Destination:" in line:
+                        self._set_phase(job, "Starting stream download...", indeterminate=False)
+                    elif "[ffmpeg]" in line.lower():
+                        self._set_phase(job, "Processing media streams...", min_progress=96.0)
+                    elif ("[youtube]" in line or "[kick]" in line or "[info]" in line) and not state["media_started"]:
+                        self._set_phase(job, "Extracting stream info...")
 
                 self._append_log(job, line)
 
@@ -568,6 +767,13 @@ class DownloadManager:
         cfg = self.cfg
         cfg.ensure_dirs()
         dest_dir = cfg.download_dir
+        prog_tmpl = (
+            "download:OSP_PROG|%(progress.status)s|%(progress.downloaded_bytes)s|"
+            "%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|"
+            "%(progress._speed_str)s|%(progress._eta_str)s|"
+            "%(info.vcodec)s|%(info.acodec)s|%(info.protocol)s"
+        )
+        pp_tmpl = "postprocess:OSP_PP|%(progress.postprocessor)s|%(progress.status)s"
 
         try:
             target_stem = None
@@ -578,15 +784,15 @@ class DownloadManager:
 
             if job["platform"] == "kick":
                 if job["mode"] in ("video_chat", "chat_only"):
-                    with self._lock:
-                        job["phase"] = "Downloading Kick chat..."
+                    self._set_phase(job, "Downloading Kick chat...")
+                    chat_scale = 0.30 if job["mode"] == "video_chat" else 0.95
                     chat_res = download_kick_chat(
                         job["url"],
                         dest_dir,
                         cfg,
                         output_stem=target_stem,
                         log_cb=lambda msg: self._append_log(job, msg),
-                        progress_cb=lambda pct, phase: self._update_progress(job, pct * (0.35 if job["mode"] == "video_chat" else 1.0), phase),
+                        progress_cb=lambda pct, phase: self._update_progress(job, pct * chat_scale, phase),
                         cancel_event=job["cancel_event"],
                     )
                     with self._lock:
@@ -597,13 +803,16 @@ class DownloadManager:
                         self.library.pair_chat(job["target_video_id"], rel_chat)
 
                 if job["mode"] in ("video_chat", "video_only"):
-                    with self._lock:
-                        job["phase"] = "Downloading Kick video..."
+                    self._set_phase(job, "Extracting Kick stream info...")
                     cmd = [
                         "yt-dlp",
                         "--no-cache-dir",
+                        "--no-quiet",
                         "--newline",
+                        "--progress",
                         "--no-playlist",
+                        "--progress-template", prog_tmpl,
+                        "--progress-template", pp_tmpl,
                         "-P", f"home:{dest_dir}",
                         "-P", f"temp:{dest_dir}",
                         "--windows-filenames",
@@ -614,16 +823,23 @@ class DownloadManager:
                         "-o", "%(title)s [%(id)s].%(ext)s",
                         job["url"],
                     ]
-                    files = self._run_ytdlp(job, cmd, dest_dir)
+                    video_range = (30.0, 95.0) if job["mode"] == "video_chat" else (0.0, 95.0)
+                    files = self._run_ytdlp(job, cmd, dest_dir, progress_range=video_range)
                     with self._lock:
                         job["output_files"].extend(files)
             else:
+                self._set_phase(job, "Extracting stream info...")
                 out_tmpl = f"{target_stem}.%(ext)s" if target_stem else "%(title)s [%(id)s].%(ext)s"
                 cmd = [
                     "yt-dlp",
                     "--no-cache-dir",
+                    "--remote-components", "ejs:github",
+                    "--no-quiet",
                     "--newline",
+                    "--progress",
                     "--no-playlist",
+                    "--progress-template", prog_tmpl,
+                    "--progress-template", pp_tmpl,
                     "-P", f"home:{dest_dir}",
                     "-P", f"temp:{dest_dir}",
                     "--windows-filenames",
@@ -644,7 +860,7 @@ class DownloadManager:
                         cmd.extend(["--write-subs", "--sub-langs", "live_chat"])
 
                 cmd.append(job["url"])
-                files = self._run_ytdlp(job, cmd, dest_dir)
+                files = self._run_ytdlp(job, cmd, dest_dir, progress_range=(0.0, 95.0))
                 with self._lock:
                     job["output_files"].extend(files)
 
@@ -653,11 +869,13 @@ class DownloadManager:
                     if os.path.isfile(cand):
                         self.library.pair_chat(job["target_video_id"], os.path.relpath(cand, dest_dir))
 
+            self._set_phase(job, "Scanning library & generating preview...", min_progress=99.0)
             self.library.scan()
             with self._lock:
                 job["status"] = "completed"
                 job["phase"] = "Completed"
                 job["progress"] = 100.0
+                job["indeterminate"] = False
                 job["speed"] = ""
                 job["eta"] = ""
                 job["finished_at"] = int(time.time() * 1000)
@@ -665,19 +883,28 @@ class DownloadManager:
             with self._lock:
                 job["status"] = "cancelled"
                 job["phase"] = "Cancelled"
+                job["indeterminate"] = False
+                job["speed"] = ""
+                job["eta"] = ""
                 job["finished_at"] = int(time.time() * 1000)
         except Exception as exc:
             with self._lock:
                 job["status"] = "failed"
                 job["phase"] = "Failed"
+                job["indeterminate"] = False
+                job["speed"] = ""
+                job["eta"] = ""
                 job["error"] = str(exc)
                 job["finished_at"] = int(time.time() * 1000)
                 job["logs"].append(f"Error: {exc}")
 
     def _update_progress(self, job: dict, pct: float, phase: str) -> None:
         with self._lock:
-            job["progress"] = min(100.0, max(0.0, pct))
+            job["progress"] = max(job["progress"], min(100.0, max(0.0, pct)))
             job["phase"] = phase
+            job["indeterminate"] = False
+            job["speed"] = ""
+            job["eta"] = ""
 
 
 def cli_main(argv=None) -> int:
@@ -722,6 +949,7 @@ def cli_main(argv=None) -> int:
     cmd = [
         "yt-dlp",
         "--no-cache-dir",
+        "--remote-components", "ejs:github",
         "-P", f"home:{dest_dir}",
         "-P", f"temp:{dest_dir}",
         "--windows-filenames",

@@ -29,6 +29,7 @@ class StreamVaultApp {
     this.thumbPollTimer = null;
     this.queuePollTimer = null;
     this.lastJobStates = new Map();
+    this.expandedLogJobIds = new Set();
 
     this.libraryView = document.getElementById('library-view');
     this.videoGrid = document.getElementById('video-grid');
@@ -625,16 +626,23 @@ class StreamVaultApp {
       const bar = document.createElement('div');
       bar.className = 'job-bar-track';
       const fill = document.createElement('div');
-      fill.className = 'job-bar-fill';
-      fill.style.width = `${job.progress || 0}%`;
+      const isIndet = Boolean(job.indeterminate && job.status === 'running');
+      fill.className = `job-bar-fill${isIndet ? ' indeterminate' : ''}`;
+      const barPct = isIndet && (job.progress || 0) <= 0 ? 100 : (job.progress || 0);
+      fill.style.width = `${barPct}%`;
       bar.appendChild(fill);
       card.appendChild(bar);
 
       const meta = document.createElement('div');
       meta.className = 'job-meta';
-      const leftText = [job.phase, job.speed, job.eta ? `ETA ${job.eta}` : ''].filter(Boolean).join(' · ');
-      const rightText = `${(job.progress || 0).toFixed(1)}%`;
-      meta.innerHTML = `<span>${leftText}</span><span>${rightText}</span>`;
+      const leftSpan = document.createElement('span');
+      leftSpan.className = 'job-meta-left';
+      leftSpan.textContent = [job.phase, job.speed, job.eta ? `ETA ${job.eta}` : ''].filter(Boolean).join(' · ');
+      const rightSpan = document.createElement('span');
+      rightSpan.className = 'job-meta-right';
+      rightSpan.textContent = isIndet && (job.progress || 0) <= 0 ? 'Working...' : `${(job.progress || 0).toFixed(1)}%`;
+      meta.appendChild(leftSpan);
+      meta.appendChild(rightSpan);
       card.appendChild(meta);
 
       if (job.error) {
@@ -644,19 +652,51 @@ class StreamVaultApp {
         card.appendChild(err);
       }
 
-      if (job.status === 'queued' || job.status === 'running') {
-        const cancelBtn = document.createElement('button');
-        cancelBtn.className = 'btn btn-ghost btn-sm';
-        cancelBtn.textContent = 'Cancel';
-        cancelBtn.onclick = async () => {
-          await fetch('/api/downloads/cancel', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: job.id }),
-          });
-          this.fetchDownloads();
-        };
-        card.appendChild(cancelBtn);
+      const hasLogs = Array.isArray(job.logs) && job.logs.length > 0;
+      const isRunning = job.status === 'queued' || job.status === 'running';
+      if (hasLogs || isRunning) {
+        const actions = document.createElement('div');
+        actions.className = 'job-actions';
+
+        if (hasLogs) {
+          const isExpanded = this.expandedLogJobIds.has(job.id);
+          const logBtn = document.createElement('button');
+          logBtn.className = 'btn btn-ghost btn-sm';
+          logBtn.textContent = isExpanded ? 'Hide log' : `Show log (${job.logs.length})`;
+          logBtn.onclick = () => {
+            if (this.expandedLogJobIds.has(job.id)) this.expandedLogJobIds.delete(job.id);
+            else this.expandedLogJobIds.add(job.id);
+            this.renderQueue();
+          };
+          actions.appendChild(logBtn);
+        } else {
+          actions.appendChild(document.createElement('span'));
+        }
+
+        if (isRunning) {
+          const cancelBtn = document.createElement('button');
+          cancelBtn.className = 'btn btn-ghost btn-sm';
+          cancelBtn.textContent = 'Cancel';
+          cancelBtn.onclick = async () => {
+            await fetch('/api/downloads/cancel', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: job.id }),
+            });
+            this.fetchDownloads();
+          };
+          actions.appendChild(cancelBtn);
+        }
+
+        card.appendChild(actions);
+
+        if (hasLogs && this.expandedLogJobIds.has(job.id)) {
+          const logBox = document.createElement('div');
+          logBox.className = 'job-logs';
+          logBox.textContent = job.logs.join('\n');
+          card.appendChild(logBox);
+          logBox.scrollTop = logBox.scrollHeight;
+        }
       }
 
       listEl.appendChild(card);
