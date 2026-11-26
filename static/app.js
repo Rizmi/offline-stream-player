@@ -344,6 +344,20 @@ class StreamVaultApp {
       thumbWrap.appendChild(track);
     }
 
+    if (compact && pos >= 5) {
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'card-remove-cw';
+      removeBtn.title = 'Remove from Continue Watching';
+      removeBtn.setAttribute('aria-label', 'Remove from Continue Watching');
+      removeBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+      removeBtn.onclick = (e) => {
+        e.stopPropagation();
+        this.clearVideoProgress(video);
+      };
+      thumbWrap.appendChild(removeBtn);
+    }
+
     card.appendChild(thumbWrap);
 
     const body = document.createElement('div');
@@ -404,6 +418,7 @@ class StreamVaultApp {
       dropdown.innerHTML = `
         <button class="dropdown-item" data-act="pair">Pair Chat File</button>
         <button class="dropdown-item" data-act="dl-chat">Download Chat for Video</button>
+        ${pos >= 5 ? '<button class="dropdown-item" data-act="clear-progress">Remove from Continue Watching</button>' : ''}
         <button class="dropdown-item danger" data-act="delete">Delete Media</button>
       `;
 
@@ -426,6 +441,7 @@ class StreamVaultApp {
         this.openDropdownId = null;
         if (act === 'pair') this.openPairModal(video);
         else if (act === 'dl-chat') this.openDownloadModal({ mode: 'chat_only', targetVideoId: video.id });
+        else if (act === 'clear-progress') this.clearVideoProgress(video);
         else if (act === 'delete') this.deleteVideo(video);
       };
 
@@ -441,6 +457,22 @@ class StreamVaultApp {
     this.libraryView.classList.remove('active');
     window.history.replaceState(null, '', `#watch/${video.id}`);
     this.watch.openLibraryVideo(video);
+  }
+
+  async clearVideoProgress(video) {
+    try {
+      const res = await fetch(`/api/history?id=${encodeURIComponent(video.id)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Request failed');
+      video.progress = {
+        position: 0,
+        duration: video.duration || 0,
+        updated_at: 0,
+      };
+      this.renderLibrary();
+      this.showToast('Removed from Continue Watching');
+    } catch (_) {
+      this.showToast('Failed to remove progress');
+    }
   }
 
   async deleteVideo(video) {
@@ -805,10 +837,20 @@ class StreamVaultApp {
     document.getElementById('set-kick-workers').value = env.KICK_CHAT_WORKERS || '1';
     document.getElementById('set-kick-delay').value = env.KICK_REQUEST_DELAY || '0.25';
     document.getElementById('set-thumb-seek').value = env.THUMBNAIL_SEEK_SEC || '120';
+    const cbSel = document.getElementById('set-yt-cookies-browser');
+    cbSel.querySelectorAll('option[data-custom]').forEach((o) => o.remove());
+    if (env.YT_COOKIES_FROM_BROWSER && !Array.from(cbSel.options).some((o) => o.value === env.YT_COOKIES_FROM_BROWSER)) {
+      const customCbOpt = new Option(`Custom (${env.YT_COOKIES_FROM_BROWSER})`, env.YT_COOKIES_FROM_BROWSER);
+      customCbOpt.dataset.custom = '1';
+      cbSel.add(customCbOpt);
+    }
+    cbSel.value = env.YT_COOKIES_FROM_BROWSER || '';
+    document.getElementById('set-yt-cookies-file').value = env.YT_COOKIES_FILE || '';
     document.getElementById('settings-status').classList.add('hidden');
     const healthGrid = document.getElementById('settings-health');
     healthGrid.innerHTML = '';
     for (const c of health?.checks || []) {
+      if (c.name === 'download_dir' && c.ok) continue;
       const pill = document.createElement('span');
       pill.className = `health-pill ${c.ok ? 'ok' : 'fail'}`;
       pill.title = c.detail || '';
@@ -829,6 +871,8 @@ class StreamVaultApp {
       KICK_CHAT_WORKERS: document.getElementById('set-kick-workers').value,
       KICK_REQUEST_DELAY: document.getElementById('set-kick-delay').value,
       THUMBNAIL_SEEK_SEC: document.getElementById('set-thumb-seek').value,
+      YT_COOKIES_FROM_BROWSER: document.getElementById('set-yt-cookies-browser').value.trim(),
+      YT_COOKIES_FILE: document.getElementById('set-yt-cookies-file').value.trim(),
     };
 
     const res = await fetch('/api/settings', {

@@ -85,7 +85,14 @@ class StudioHandler(http.server.SimpleHTTPRequestHandler):
     context: AppContext = None  # injected by factory
 
     def __init__(self, *args, **kwargs):
+        self._no_cache_static = False
         super().__init__(*args, directory=STATIC_DIR, **kwargs)
+
+    def end_headers(self):
+        if self._no_cache_static:
+            self.send_header("Cache-Control", "no-store")
+            self._no_cache_static = False
+        super().end_headers()
 
     def log_message(self, format, *args):
         pass
@@ -286,7 +293,11 @@ class StudioHandler(http.server.SimpleHTTPRequestHandler):
         if parsed.path == "/" or not os.path.isfile(os.path.join(STATIC_DIR, parsed.path.lstrip("/"))):
             self.path = "/index.html"
 
-        super().do_GET()
+        self._no_cache_static = True
+        try:
+            super().do_GET()
+        finally:
+            self._no_cache_static = False
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)

@@ -21,6 +21,13 @@ REQUIRED_KEYS = (
     "THUMBNAIL_SEEK_SEC",
 )
 
+OPTIONAL_KEYS = (
+    "YT_COOKIES_FROM_BROWSER",
+    "YT_COOKIES_FILE",
+)
+
+ALL_KEYS = REQUIRED_KEYS + OPTIONAL_KEYS
+
 _CONFIG_LOCK = threading.Lock()
 
 
@@ -106,6 +113,8 @@ class AppConfig:
     kick_chat_workers: int
     kick_request_delay: float
     thumbnail_seek_sec: int
+    yt_cookies_from_browser: str = ""
+    yt_cookies_file: str = ""
 
     @property
     def cache_dir(self) -> str:
@@ -155,6 +164,8 @@ class AppConfig:
             "KICK_CHAT_WORKERS": str(self.kick_chat_workers),
             "KICK_REQUEST_DELAY": str(self.kick_request_delay),
             "THUMBNAIL_SEEK_SEC": str(self.thumbnail_seek_sec),
+            "YT_COOKIES_FROM_BROWSER": self.yt_cookies_from_browser,
+            "YT_COOKIES_FILE": self.yt_cookies_file,
         }
 
     def to_api_dict(self) -> dict:
@@ -176,6 +187,15 @@ def _build_config(values: dict) -> AppConfig:
     if yt_format not in ("mkv", "mp4", "webm"):
         raise ConfigError(f"YT_FORMAT in .env must be mkv, mp4, or webm (got '{yt_format}')")
 
+    yt_cookies_from_browser = values.get("YT_COOKIES_FROM_BROWSER", "").strip()
+    raw_cookies_file = values.get("YT_COOKIES_FILE", "").strip()
+    yt_cookies_file = ""
+    if raw_cookies_file:
+        expanded = os.path.expanduser(raw_cookies_file)
+        yt_cookies_file = os.path.abspath(expanded if os.path.isabs(expanded) else os.path.join(ROOT_DIR, expanded))
+        if not os.path.isfile(yt_cookies_file):
+            raise ConfigError(f"YT_COOKIES_FILE does not exist: {yt_cookies_file}")
+
     return AppConfig(
         download_dir=download_dir,
         host=_require_str(values, "HOST"),
@@ -188,6 +208,8 @@ def _build_config(values: dict) -> AppConfig:
         kick_chat_workers=_require_int(values, "KICK_CHAT_WORKERS", minimum=1),
         kick_request_delay=_require_float(values, "KICK_REQUEST_DELAY", minimum=0.05),
         thumbnail_seek_sec=_require_int(values, "THUMBNAIL_SEEK_SEC", minimum=1),
+        yt_cookies_from_browser=yt_cookies_from_browser,
+        yt_cookies_file=yt_cookies_file,
     )
 
 
@@ -204,7 +226,7 @@ def save_env_updates(updates: dict) -> AppConfig:
         current = parse_env_file(ENV_PATH)
         merged = dict(current)
         for key, val in updates.items():
-            if key not in REQUIRED_KEYS:
+            if key not in ALL_KEYS:
                 raise ConfigError(f"Unknown configuration key: {key}")
             merged[key] = str(val).strip()
 
@@ -224,8 +246,8 @@ def save_env_updates(updates: dict) -> AppConfig:
                         continue
                 lines.append(raw if raw.endswith("\n") else raw + "\n")
 
-        for k in REQUIRED_KEYS:
-            if k not in seen:
+        for k in ALL_KEYS:
+            if k not in seen and (k in REQUIRED_KEYS or final_env[k] or k in updates):
                 lines.append(f"{k}={final_env[k]}\n")
 
         tmp_path = ENV_PATH + ".tmp"

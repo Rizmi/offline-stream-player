@@ -361,6 +361,29 @@
             <input id="set-thumb-seek" type="number" min="1" class="text-input">
           </div>
         </div>
+
+        <div class="form-grid">
+          <div>
+            <label class="field-label" for="set-yt-cookies-browser">YouTube Cookies Browser</label>
+            <select id="set-yt-cookies-browser" class="select-input full">
+              <option value="">None (No Cookies)</option>
+              <option value="zen">Zen Browser</option>
+              <option value="firefox">Firefox</option>
+              <option value="chrome">Google Chrome</option>
+              <option value="chromium">Chromium</option>
+              <option value="brave">Brave</option>
+              <option value="edge">Microsoft Edge</option>
+              <option value="vivaldi">Vivaldi</option>
+              <option value="opera">Opera</option>
+              <option value="safari">Safari</option>
+            </select>
+          </div>
+          <div class="col-span-2">
+            <label class="field-label" for="set-yt-cookies-file">Cookies File (cookies.txt)</label>
+            <input id="set-yt-cookies-file" type="text" class="text-input" placeholder="Optional path (overrides browser)">
+          </div>
+        </div>
+        <div class="modal-hint">Optional: only needed for age-restricted or sign-in-required YouTube streams.</div>
         <div id="settings-status" class="form-error hidden"></div>
 
         <div>
@@ -369,7 +392,7 @@
         </div>
       </div>
       <div class="modal-footer">
-        <span class="modal-hint">Saved directly to .env (gitignored).</span>
+        <span class="modal-hint">Saved locally and applied immediately.</span>
         <div class="modal-footer-btns">
           <button class="btn btn-ghost" data-close-modal="settings-modal">Cancel</button>
           <button id="btn-save-settings" class="btn btn-primary">Save Settings</button>

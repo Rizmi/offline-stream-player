@@ -389,6 +389,39 @@ html, body {
   border-radius: 4px;
 }
 
+.card-remove-cw {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(11, 13, 16, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #e5e7eb;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.video-card:hover .card-remove-cw,
+.video-card:focus-within .card-remove-cw {
+  opacity: 1;
+}
+
+.card-remove-cw:hover {
+  background: rgba(225, 29, 72, 0.9);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #fff;
+}
+
+@media (hover: none) {
+  .card-remove-cw { opacity: 1; }
+}
+
 .card-progress-track {
   position: absolute;
   left: 0;
@@ -474,7 +507,8 @@ html, body {
   position: absolute;
   right: 10px;
   bottom: 42px;
-  width: 190px;
+  min-width: 190px;
+  width: max-content;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
@@ -988,6 +1022,10 @@ html, body {
   gap: 10px;
 }
 
+.col-span-2 {
+  grid-column: span 2;
+}
+
 .probe-preview {
   display: flex;
   gap: 12px;
@@ -1230,6 +1268,7 @@ html, body {
   .search-wrap { order: 3; max-width: none; width: 100%; }
   .dir-chip { display: none; }
   .form-grid { grid-template-columns: 1fr; }
+  .col-span-2 { grid-column: auto; }
   #watch-view { flex-direction: column !important; }
   .chat-sidebar { width: 100% !important; max-width: none; height: 42vh; border-left: none; border-top: 1px solid var(--border); }
   .resizer { display: none !important; }

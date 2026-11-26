@@ -245,6 +245,68 @@ def _ytdlp_env(download_dir: str) -> dict:
     return env
 
 
+def _resolve_zen_profile_dir() -> Optional[str]:
+    candidates = [
+        os.path.expanduser("~/.zen"),
+        os.path.expanduser("~/.config/zen"),
+        os.path.expanduser("~/.var/app/app.zen_browser.zen/.zen"),
+        os.path.expanduser("~/Library/Application Support/zen"),
+    ]
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(os.path.join(appdata, "zen"))
+    for path in candidates:
+        if os.path.isdir(path):
+            return path
+    return None
+
+
+def _build_yt_cookie_args(cfg: AppConfig) -> list:
+    if cfg.yt_cookies_file:
+        if not os.path.isfile(cfg.yt_cookies_file):
+            raise RuntimeError(f"Configured YT_COOKIES_FILE not found: {cfg.yt_cookies_file}")
+        return ["--cookies", cfg.yt_cookies_file]
+
+    spec = (cfg.yt_cookies_from_browser or "").strip()
+    if not spec:
+        return []
+
+    base_part, *container_part = spec.split("::", 1)
+    browser_name, *profile_part = base_part.split(":", 1)
+    if browser_name.strip().lower() in ("zen", "zen-browser"):
+        zen_dir = _resolve_zen_profile_dir()
+        if not zen_dir:
+            raise RuntimeError(
+                "Zen Browser profile directory was not found (~/.zen or ~/.config/zen). "
+                "Select another browser or provide a cookies.txt file in Settings."
+            )
+        target = zen_dir
+        if profile_part and profile_part[0].strip():
+            prof = os.path.expanduser(profile_part[0].strip())
+            target = prof if os.path.isabs(prof) else os.path.join(zen_dir, prof)
+        resolved = f"firefox:{target}"
+        if container_part:
+            resolved += f"::{container_part[0]}"
+        return ["--cookies-from-browser", resolved]
+
+    return ["--cookies-from-browser", spec]
+
+
+def _format_yt_error(err_msg: str, cfg: AppConfig) -> str:
+    low = (err_msg or "").lower()
+    if (
+        ("sign in" in low or "confirm your age" in low or "not a bot" in low)
+        and not cfg.yt_cookies_file
+        and not cfg.yt_cookies_from_browser
+    ):
+        return (
+            f"{err_msg}\n\n"
+            "Tip: Open Settings (gear icon) and set YouTube Cookies Browser "
+            "(e.g. Zen, Firefox, Chrome) or a cookies.txt file."
+        )
+    return err_msg
+
+
 def probe_url(url: str, cfg: AppConfig) -> dict:
     """Extract metadata and available qualities for a YouTube or Kick URL."""
     url = url.strip()
@@ -256,6 +318,7 @@ def probe_url(url: str, cfg: AppConfig) -> dict:
     cmd = ["yt-dlp", "-J", "--no-playlist", "--no-cache-dir"]
     if platform == "youtube":
         cmd.extend(["--remote-components", "ejs:github"])
+        cmd.extend(_build_yt_cookie_args(cfg))
     cmd.append(url)
     proc = subprocess.run(
         cmd,
@@ -267,6 +330,8 @@ def probe_url(url: str, cfg: AppConfig) -> dict:
     )
     if proc.returncode != 0 or not proc.stdout.strip():
         err_msg = (proc.stderr or "Failed to extract metadata").strip().splitlines()[-1]
+        if platform == "youtube":
+            err_msg = _format_yt_error(err_msg, cfg)
         raise RuntimeError(err_msg)
 
     info = json.loads(proc.stdout)
@@ -1080,6 +1145,7 @@ class DownloadManager:
                     "--print", "after_move:AFTER_MOVE:%(filepath)s",
                     "-o", out_tmpl,
                 ]
+                cmd.extend(_build_yt_cookie_args(cfg))
                 if job["mode"] == "chat_only":
                     cmd.extend(["--skip-download", "--write-subs", "--sub-langs", "live_chat"])
                 else:
@@ -1120,15 +1186,16 @@ class DownloadManager:
                 job["eta"] = ""
                 job["finished_at"] = int(time.time() * 1000)
         except Exception as exc:
+            err_text = _format_yt_error(str(exc), cfg) if job["platform"] == "youtube" else str(exc)
             with self._lock:
                 job["status"] = "failed"
                 job["phase"] = "Failed"
                 job["indeterminate"] = False
                 job["speed"] = ""
                 job["eta"] = ""
-                job["error"] = str(exc)
+                job["error"] = err_text
                 job["finished_at"] = int(time.time() * 1000)
-                job["logs"].append(f"Error: {exc}")
+                job["logs"].append(f"Error: {err_text}")
 
     def _update_progress(self, job: dict, pct: float, phase: str) -> None:
         with self._lock:
@@ -1189,6 +1256,7 @@ def cli_main(argv=None) -> int:
         "--continue",
         "-o", "%(title)s [%(id)s].%(ext)s",
     ]
+    cmd.extend(_build_yt_cookie_args(cfg))
     if args.chat_only:
         cmd.extend(["--skip-download", "--write-subs", "--sub-langs", "live_chat"])
     else:
